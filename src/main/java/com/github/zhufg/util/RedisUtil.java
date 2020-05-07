@@ -23,7 +23,7 @@ import java.util.function.Supplier;
 public class RedisUtil {
     public static final String EMPTY_STRING="!&*!{}";
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisUtil.class);
-    private static final int  LOCK_MAX_SEC=120;
+    private static final int LOCK_MAX_SEC=120;
     private static final int WAIT_TIME_OUT_SEC=5;
 
     private static final  StringBuilder LUA_INCR = new StringBuilder();
@@ -81,7 +81,6 @@ public class RedisUtil {
     }
     public static <T>T getCache(String key, Type type, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
         T t = null;
-
         String value = lockCacheGet(key, sp, expireTime, timeUnit, redisTemplate,false, maxWaitTime);
         if (value == null) {
             return null;
@@ -122,44 +121,83 @@ public class RedisUtil {
         return getCacheNotNull(key, type,  sp,  expireTime, timeUnit, redisTemplate, WAIT_TIME_OUT_SEC);
     }
 
+    /**
+     * 在CPU和反应时间中尽量均衡
+     * 等待时间0.75内，线程sleep，等待超过0.75 线程yield
+     * @param key
+     * @param sp
+     * @param expireTime
+     * @param timeUnit
+     * @param redisTemplate
+     * @param notNull
+     * @param maxWaitTime
+     * @param <T>
+     * @return
+     * @throws TimeoutException
+     */
     private static <T>String lockCacheGet(String key, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, boolean notNull, int maxWaitTime) throws TimeoutException {
         key="*cng|"+key;
-        String value = null;
         try {
-            value = getFromRedis(key,  redisTemplate);
+            String value = getFromRedis(key,  redisTemplate);
             if (value != null) {
-                if (EMPTY_STRING.equals(value)) {
-                    if(notNull){
-                        return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
-                    }
-                    return null;
-                }
-                return value;
+                return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
             }
             long beginWait = System.currentTimeMillis();
-            for (; ; ) {
+            long waitTime = 0;
+            for ( ; ; ) {
                 if (lockByKey(key, expireTime, timeUnit,  redisTemplate)) {
-                    return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
-                }else if(System.currentTimeMillis()-beginWait> maxWaitTime*1000){
+                    try {
+                        value = getFromRedis(key, redisTemplate);
+                        if(value != null){
+                            return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+                        }
+                        return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
+                    }finally {
+                        unlockByKey(key, redisTemplate);
+                    }
+                }else if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
                     throw new TimeoutException("等待超时！");
-                }else{
+                }else if(waitTime>maxWaitTime*750){
                     Thread.yield();
+                }else{
+                    long sleepTime = maxWaitTime*10;
+                    if(sleepTime <10){
+                        sleepTime = 10;
+                    }else if(sleepTime >50){
+                        sleepTime = 50;
+                    }
+                    try {
+                        Thread.sleep(sleepTime);
+                    } catch (InterruptedException e) {
+                        LOGGER.error("Thread.sleep."+sleepTime,e);
+                        //just ignore
+                    }
                 }
                 value = getFromRedis(key, redisTemplate);
                 if (value != null) {
-                    if (EMPTY_STRING.equals(value)) {
-                        if(notNull){
-                            return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
-                        }
-                        return null;
-                    }
-                    return value.toString();
+                    return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
                 }
             }
         }catch (RedisInvalidException e) {
             return doQueryCache(sp, key,expireTime,timeUnit, redisTemplate);
         }
 
+
+    }
+
+    private static <T> String dealValue(String value, boolean notNull, Supplier<T> sp, String key, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate) {
+        value = unpackingValue(value);
+        if(notNull && value == null){
+            return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
+        }
+        return value;
+    }
+
+    private static String unpackingValue(String value) {
+        if (EMPTY_STRING.equals(value)) {
+            return null;
+        }
+        return value;
 
     }
 
@@ -188,8 +226,15 @@ public class RedisUtil {
     private static Boolean lockByKey(String key,  Long expireTime,TimeUnit timeUnit, RedisTemplate redisTemplate) throws RedisInvalidException {
         long ts = TimeUnit.SECONDS.convert(expireTime, timeUnit);
         long lockesc = LOCK_MAX_SEC<ts/10?LOCK_MAX_SEC:ts/10;
-        key = "@$%#lockByKeySec##"+key;
+        key = getLockKey(key);
         return transLock(key, lockesc, TimeUnit.SECONDS, redisTemplate);
+    }
+    private static Boolean unlockByKey(String key, RedisTemplate redisTemplate) throws RedisInvalidException {
+        key = getLockKey(key);
+        return delete(redisTemplate, key);
+    }
+    private static  String getLockKey(String key){
+        return "@$%#lockByKeySec##"+key;
     }
     private static Boolean transLock(String key,  Long expireTime,TimeUnit timeUnit, RedisTemplate redisTemplate) throws RedisInvalidException {
         try {
@@ -340,6 +385,7 @@ public class RedisUtil {
             super(message, cause);
         }
     }
+
 
 
 }
