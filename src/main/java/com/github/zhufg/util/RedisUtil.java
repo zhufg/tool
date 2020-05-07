@@ -348,7 +348,7 @@ public class RedisUtil {
             if(StringUtils.isBlank(get)){
                 return null;
             }
-            T t = t = JSON.parseObject(get, type);
+            T t  = JSON.parseObject(get, type);
             return t;
         }catch (Exception e){
             throw new RedisInvalidException("redis get 异常",e);
