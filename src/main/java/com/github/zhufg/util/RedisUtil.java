@@ -20,6 +20,12 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.function.Supplier;
 
+/**
+ * increBy依赖jedis
+ * 此工具产生的主要目的是解决缓存击穿和缓存穿透
+ * 后期增加了部分内容
+ *
+ */
 public class RedisUtil {
     public static final String EMPTY_STRING="!&*!{}";
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisUtil.class);
@@ -35,6 +41,23 @@ public class RedisUtil {
         LUA_INCR.append(" end");
         LUA_INCR.append(" return added");
     }
+
+    /**
+     * maxWaitTime 最长等待时间
+     * 为了防止过多线程等待的问题，设置最长等待时间
+     * 执行时间不受限，请自行解决执行过慢的问题
+     * 不希望通过工具去限制最长执行时间
+     * @param key
+     * @param type
+     * @param sp
+     * @param expireTime
+     * @param timeUnit
+     * @param redisTemplate
+     * @param maxWaitTime 最长等待时间
+     * @param <T>
+     * @return
+     * @throws TimeoutException
+     */
     public static <T>List getListCache(String key, Type type, Supplier<List<T>> sp, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
         List<T> t = null;
         String value = lockCacheGet(key, sp, expireTime, timeUnit, redisTemplate,false, maxWaitTime);
@@ -46,6 +69,21 @@ public class RedisUtil {
         return t;
     }
 
+    /**
+     * maxWaitTime 默认5秒
+     * 为了防止过多线程等待的问题，设置最长等待时间
+     * 执行时间不受限，请自行解决执行过慢的问题
+     * 不希望通过工具去限制最长执行时间
+     * @param key
+     * @param type
+     * @param sp
+     * @param expireTime
+     * @param timeUnit
+     * @param redisTemplate
+     * @param <T>
+     * @return
+     * @throws TimeoutException
+     */
     public static <T>List getListCache(String key,Type type, Supplier<List<T>> sp, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate) throws TimeoutException {
         return getListCache(key, type,  sp,  expireTime, timeUnit, redisTemplate, WAIT_TIME_OUT_SEC);
     }
@@ -53,6 +91,11 @@ public class RedisUtil {
      * 有缓存击穿的问题，只在特殊场景下使用
      * 比如部分数据可能存在直接修改数据库，导致缓存结果不一致
      * 同时不能接受缓存为空的代价，强制执行查询
+     *
+     * maxWaitTime 默认5秒
+     * 为了防止过多线程等待的问题，设置最长等待时间
+     * 执行时间不受限，请自行解决执行过慢的问题
+     * 不希望通过工具去限制最长执行时间
      *
      * @throws TimeoutException
      */
@@ -64,6 +107,9 @@ public class RedisUtil {
      * 比如部分数据可能存在直接修改数据库，导致缓存结果不一致
      * 同时不能接受缓存为空的代价，强制执行查询
      *
+     * 为了防止过多线程等待的问题，设置最长等待时间
+     * 执行时间不受限，请自行解决执行过慢的问题
+     * 不希望通过工具去限制最长执行时间
      * @throws TimeoutException
      */
     public static <T>List getListCacheNotNull(String key, Type type, Supplier<List<T>> sp, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
