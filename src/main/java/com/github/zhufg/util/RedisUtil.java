@@ -371,7 +371,7 @@ public class RedisUtil {
     }
 
 
-    public static <T>List getListCache(RedisTemplate redisTemplate, String key, Type type, Long expireTime, TimeUnit timeUnit) throws RedisInvalidException {
+    public static <T>List getListCache(RedisTemplate redisTemplate, String key, Type type) throws RedisInvalidException {
         Object value = get(redisTemplate, key);
         if (value == null || EMPTY_STRING.equals(value) ) {
             return Collections.EMPTY_LIST;
