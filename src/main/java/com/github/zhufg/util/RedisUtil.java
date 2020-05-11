@@ -191,6 +191,9 @@ public class RedisUtil {
             long beginWait = System.currentTimeMillis();
             long waitTime = 0;
             for ( ; ; ) {
+                if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
+                    throw new TimeoutException("等待超时！");
+                }
                 if (lockByKey(key, expireTime, timeUnit,  redisTemplate)) {
                     try {
                         value = getFromRedis(key, redisTemplate);
@@ -201,9 +204,12 @@ public class RedisUtil {
                     }finally {
                         unlockByKey(key, redisTemplate);
                     }
-                }else if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
-                    throw new TimeoutException("等待超时！");
-                }else if(waitTime>maxWaitTime*750){
+                }
+                value = getFromRedis(key, redisTemplate);
+                if (value != null) {
+                    return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+                }
+                if(waitTime>maxWaitTime*750){
                     Thread.yield();
                 }else{
                     long sleepTime = maxWaitTime*10;
@@ -218,10 +224,6 @@ public class RedisUtil {
                         LOGGER.error("Thread.sleep."+sleepTime,e);
                         //just ignore
                     }
-                }
-                value = getFromRedis(key, redisTemplate);
-                if (value != null) {
-                    return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
                 }
             }
         }catch (RedisInvalidException e) {
