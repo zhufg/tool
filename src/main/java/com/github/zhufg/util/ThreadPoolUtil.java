@@ -6,9 +6,11 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Vector;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
+
 
 /**
  * @auth zhufg
@@ -258,8 +260,8 @@ public class ThreadPoolUtil {
         private long endTime;
         private long lastMillis;
         private volatile int taskStatus;//0未执行1执行中2执行完毕3执行中有异常
-        private List<Future<T>>  futures = new ArrayList<>();
-        private List<Exception> exs = new ArrayList<>();
+        private List<Future<T>>  futures = new Vector<>();
+        private List<Exception> exs = new Vector<>();
         private ResultVoidHerlper(String taskName, int timeoutSec,PoolExceptionPolicy poolExceptionPolicy){
             this.taskName  = taskName;
             this.timeoutSec = timeoutSec;
@@ -285,6 +287,9 @@ public class ThreadPoolUtil {
             return this;
         }
         public void doneTask() throws TimeoutException {
+            if(this.taskStatus >=2){
+                throw new RuntimeException("任务已执行完毕，无需再次执行");
+            }
             for (Future<T> t : futures) {
                 try {
                     if (lastMillis < System.currentTimeMillis()) {
