@@ -182,7 +182,6 @@ public class RedisUtil {
      * @throws TimeoutException
      */
     private static <T>String lockCacheGet(String key, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, boolean notNull, int maxWaitTime) throws TimeoutException {
-        key="*cng|"+key;
         try {
             String value = getFromRedis(key,  redisTemplate);
             if (value != null) {
