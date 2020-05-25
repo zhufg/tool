@@ -182,54 +182,48 @@ public class RedisUtil {
      * @throws TimeoutException
      */
     private static <T>String lockCacheGet(String key, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, boolean notNull, int maxWaitTime) throws TimeoutException {
-        try {
-            String value = getFromRedis(key,  redisTemplate);
+        String value = getFromRedis(key,  redisTemplate);
+        if (value != null) {
+            return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+        }
+        long beginWait = System.currentTimeMillis();
+        long waitTime = 0;
+        for ( ; ; ) {
+            if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
+                throw new TimeoutException("等待超时！");
+            }
+            if (lockByKey(key, expireTime, timeUnit,  redisTemplate)) {
+                try {
+                    value = getFromRedis(key, redisTemplate);
+                    if(value != null){
+                        return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+                    }
+                    return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
+                }finally {
+                    unlockByKey(key, redisTemplate);
+                }
+            }
+            value = getFromRedis(key, redisTemplate);
             if (value != null) {
                 return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
             }
-            long beginWait = System.currentTimeMillis();
-            long waitTime = 0;
-            for ( ; ; ) {
-                if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
-                    throw new TimeoutException("等待超时！");
+            if(waitTime>maxWaitTime*750){
+                Thread.yield();
+            }else{
+                long sleepTime = maxWaitTime*10;
+                if(sleepTime <10){
+                    sleepTime = 10;
+                }else if(sleepTime >50){
+                    sleepTime = 50;
                 }
-                if (lockByKey(key, expireTime, timeUnit,  redisTemplate)) {
-                    try {
-                        value = getFromRedis(key, redisTemplate);
-                        if(value != null){
-                            return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
-                        }
-                        return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
-                    }finally {
-                        unlockByKey(key, redisTemplate);
-                    }
-                }
-                value = getFromRedis(key, redisTemplate);
-                if (value != null) {
-                    return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
-                }
-                if(waitTime>maxWaitTime*750){
-                    Thread.yield();
-                }else{
-                    long sleepTime = maxWaitTime*10;
-                    if(sleepTime <10){
-                        sleepTime = 10;
-                    }else if(sleepTime >50){
-                        sleepTime = 50;
-                    }
-                    try {
-                        Thread.sleep(sleepTime);
-                    } catch (InterruptedException e) {
-                        LOGGER.error("Thread.sleep."+sleepTime,e);
-                        //just ignore
-                    }
+                try {
+                    Thread.sleep(sleepTime);
+                } catch (InterruptedException e) {
+                    LOGGER.error("Thread.sleep."+sleepTime,e);
+                    //just ignore
                 }
             }
-        }catch (RedisInvalidException e) {
-            return doQueryCache(sp, key,expireTime,timeUnit, redisTemplate);
         }
-
-
     }
 
     private static <T> String dealValue(String value, boolean notNull, Supplier<T> sp, String key, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate) {
