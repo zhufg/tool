@@ -29,7 +29,6 @@ import java.util.function.Supplier;
 public class RedisUtil {
     public static final String EMPTY_STRING="!&*!{}";
     private static final Logger LOGGER = LoggerFactory.getLogger(RedisUtil.class);
-    private static final int LOCK_MAX_SEC=120;
     private static final int WAIT_TIME_OUT_SEC=5;
 
     private static final  StringBuilder LUA_INCR = new StringBuilder();
@@ -60,7 +59,16 @@ public class RedisUtil {
      */
     public static <T>List getListCache(String key, Type type, Supplier<List<T>> sp, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
         List<T> t = null;
-        String value = lockCacheGet(key, sp, expireTime, timeUnit, redisTemplate,false, maxWaitTime);
+        CacheConfig cacheConfig = new CacheConfig();
+        cacheConfig.setExpireTimeMs(TimeUnit.MILLISECONDS.convert(expireTime, timeUnit));
+        cacheConfig.setMaxWaitTimeMs(TimeUnit.MILLISECONDS.convert(maxWaitTime, TimeUnit.SECONDS));
+
+        return getListCache(key, type, sp, redisTemplate, cacheConfig);
+    }
+    public static <T>List getListCache(String key, Type type, Supplier<List<T>> sp, RedisTemplate redisTemplate,CacheConfig cacheConfig) throws TimeoutException {
+        List<T> t = null;
+
+        String value = lockCacheGet(key, sp, redisTemplate,cacheConfig);
         if (value == null) {
             return Collections.EMPTY_LIST;
         }
@@ -113,21 +121,27 @@ public class RedisUtil {
      * @throws TimeoutException
      */
     public static <T>List getListCacheNotNull(String key, Type type, Supplier<List<T>> sp, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
-        List<T> t = null;
-        String value = lockCacheGet(key, sp, expireTime, timeUnit ,redisTemplate,true, maxWaitTime);
-        if (value == null) {
-            return Collections.EMPTY_LIST;
-        }
-        t = JSON.parseObject(value, new TypeReference<List<T>>(type) {});
-
-        return t;
+        CacheConfig cacheConfig = new CacheConfig();
+        cacheConfig.setExpireTimeMs(TimeUnit.MILLISECONDS.convert(expireTime, timeUnit));
+        cacheConfig.setMaxWaitTimeMs(TimeUnit.MILLISECONDS.convert(maxWaitTime, TimeUnit.SECONDS));
+        cacheConfig.setIfNotNull(Boolean.TRUE);
+        return getListCache(key, type, sp, redisTemplate, cacheConfig);
     }
+
     public static <T>T getCache(String key,Type type, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate) throws TimeoutException {
         return getCache(key, type,  sp,  expireTime, timeUnit, redisTemplate, WAIT_TIME_OUT_SEC);
     }
     public static <T>T getCache(String key, Type type, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
+        CacheConfig cacheConfig = new CacheConfig();
+        cacheConfig.setExpireTimeMs(TimeUnit.MILLISECONDS.convert(expireTime, timeUnit));
+        cacheConfig.setMaxWaitTimeMs(TimeUnit.MILLISECONDS.convert(maxWaitTime, TimeUnit.SECONDS));
+        return getCache(key,type,sp, redisTemplate,cacheConfig);
+
+    }
+
+    public static <T>T getCache(String key, Type type, Supplier<T> sp , RedisTemplate redisTemplate, CacheConfig cacheConfig) throws TimeoutException {
         T t = null;
-        String value = lockCacheGet(key, sp, expireTime, timeUnit, redisTemplate,false, maxWaitTime);
+        String value = lockCacheGet(key, sp, redisTemplate,cacheConfig);
         if (value == null) {
             return null;
         }
@@ -145,15 +159,12 @@ public class RedisUtil {
      * @throws TimeoutException
      */
     public static <T>T getCacheNotNull(String key, Type type, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, int maxWaitTime) throws TimeoutException {
-        T t = null;
+        CacheConfig cacheConfig = new CacheConfig();
+        cacheConfig.setExpireTimeMs(TimeUnit.MILLISECONDS.convert(expireTime, timeUnit));
+        cacheConfig.setMaxWaitTimeMs(TimeUnit.MILLISECONDS.convert(maxWaitTime, TimeUnit.SECONDS));
+        cacheConfig.setIfNotNull(true);
 
-        String value = lockCacheGet(key, sp, expireTime, timeUnit, redisTemplate,true, maxWaitTime);
-        if (value == null) {
-            return null;
-        }
-        t = JSON.parseObject(value, type);
-
-        return t;
+        return getCache(key,type,sp, redisTemplate,cacheConfig);
     }
 
     /**
@@ -169,67 +180,53 @@ public class RedisUtil {
 
     /**
      * 在CPU和反应时间中尽量均衡
-     * 等待时间0.75内，线程sleep，等待超过0.75 线程yield
      * @param key
      * @param sp
-     * @param expireTime
-     * @param timeUnit
      * @param redisTemplate
-     * @param notNull
-     * @param maxWaitTime
+     * @param cacheConfig 详见 CacheConfig
      * @param <T>
      * @return
      * @throws TimeoutException
      */
-    private static <T>String lockCacheGet(String key, Supplier<T> sp , Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate, boolean notNull, int maxWaitTime) throws TimeoutException {
+    private static <T>String lockCacheGet(String key, Supplier<T> sp , RedisTemplate redisTemplate, CacheConfig cacheConfig) throws TimeoutException {
         String value = getFromRedis(key,  redisTemplate);
         if (value != null) {
-            return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+            return dealValue(value, cacheConfig.getIfNotNull(), sp, key, cacheConfig.getExpireTimeMs(),cacheConfig.getNullExpireTimeMs(), redisTemplate);
         }
         long beginWait = System.currentTimeMillis();
-        long waitTime = 0;
         for ( ; ; ) {
-            if((waitTime=System.currentTimeMillis()-beginWait)> maxWaitTime*1000){
+            if(cacheConfig.getMaxWaitTimeMs() >0 && (System.currentTimeMillis()-beginWait)> cacheConfig.getMaxWaitTimeMs()){
                 throw new TimeoutException("等待超时！");
             }
-            if (lockByKey(key, expireTime, timeUnit,  redisTemplate)) {
+            if (lockByKey(key, cacheConfig.getLockTimeMs(),  redisTemplate)) {
                 try {
                     value = getFromRedis(key, redisTemplate);
                     if(value != null){
-                        return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+                        return dealValue(value, cacheConfig.getIfNotNull(), sp, key, cacheConfig.getExpireTimeMs(),cacheConfig.getNullExpireTimeMs(), redisTemplate);
                     }
-                    return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
                 }finally {
                     unlockByKey(key, redisTemplate);
                 }
+            }else if(cacheConfig.getMaxWaitTimeMs()<=0){
+                throw new LockedFailedException("获取锁失败");
             }
             value = getFromRedis(key, redisTemplate);
             if (value != null) {
-                return dealValue(value, notNull, sp, key, expireTime, timeUnit, redisTemplate);
+                return dealValue(value, cacheConfig.getIfNotNull(), sp, key, cacheConfig.getExpireTimeMs(),cacheConfig.getNullExpireTimeMs(), redisTemplate);
             }
-            if(waitTime>maxWaitTime*750){
-                Thread.yield();
-            }else{
-                long sleepTime = maxWaitTime*10;
-                if(sleepTime <10){
-                    sleepTime = 10;
-                }else if(sleepTime >50){
-                    sleepTime = 50;
-                }
-                try {
-                    Thread.sleep(sleepTime);
-                } catch (InterruptedException e) {
-                    LOGGER.error("Thread.sleep."+sleepTime,e);
-                    //just ignore
-                }
+            try {
+                Thread.sleep(cacheConfig.getWaitSleepTimeMs());
+            } catch (InterruptedException e) {
+                LOGGER.error("Thread.sleep."+cacheConfig.getWaitSleepTimeMs(),e);
+                //just ignore
             }
         }
     }
 
-    private static <T> String dealValue(String value, boolean notNull, Supplier<T> sp, String key, Long expireTime, TimeUnit timeUnit, RedisTemplate redisTemplate) {
+    private static <T> String dealValue(String value, boolean notNull, Supplier<T> sp, String key, Long expireTimeMs,Long nullExpireTimeMs, RedisTemplate redisTemplate) {
         value = unpackingValue(value);
         if(notNull && value == null){
-            return doQueryCache(sp, key, expireTime, timeUnit, redisTemplate);
+            return doQueryCache(sp, key, expireTimeMs, nullExpireTimeMs, redisTemplate);
         }
         return value;
     }
@@ -242,15 +239,15 @@ public class RedisUtil {
 
     }
 
-    private static <T> String doQueryCache(Supplier<T> sp,String key,  Long expireTime,TimeUnit timeUnit,RedisTemplate redisTemplate) {
+    private static <T> String doQueryCache(Supplier<T> sp,String key,  Long expireTimeMs,Long nullExpireTimeMs, RedisTemplate redisTemplate) {
         T t = sp.get();
         try {
             if (t == null || (t instanceof Collection && ((Collection) t).isEmpty())) {
-                setRedis(key, null, expireTime, timeUnit,redisTemplate);
+                setRedis(key, null, nullExpireTimeMs == null ? expireTimeMs : nullExpireTimeMs, TimeUnit.MILLISECONDS,redisTemplate);
                 return null;
             }
             String res = JSON.toJSONString(t);
-            setRedis(key, res, expireTime, timeUnit,redisTemplate);
+            setRedis(key, res, expireTimeMs, TimeUnit.MILLISECONDS,redisTemplate);
         }catch (RedisInvalidException e){
             LOGGER.error("invalid redis error", e);
             throw e;
@@ -264,11 +261,9 @@ public class RedisUtil {
     }
 
 
-    private static Boolean lockByKey(String key,  Long expireTime,TimeUnit timeUnit, RedisTemplate redisTemplate) throws RedisInvalidException {
-        long ts = TimeUnit.SECONDS.convert(expireTime, timeUnit);
-        long lockesc = LOCK_MAX_SEC<ts/10?LOCK_MAX_SEC:ts/10;
+    private static Boolean lockByKey(String key,  Long lockTimeMs, RedisTemplate redisTemplate) throws RedisInvalidException {
         key = getLockKey(key);
-        return transLock(key, lockesc, TimeUnit.SECONDS, redisTemplate);
+        return transLock(key, lockTimeMs, TimeUnit.MILLISECONDS, redisTemplate);
     }
     private static Boolean unlockByKey(String key, RedisTemplate redisTemplate) throws RedisInvalidException {
         key = getLockKey(key);
@@ -426,7 +421,81 @@ public class RedisUtil {
             super(message, cause);
         }
     }
+    public static class LockedFailedException extends RuntimeException{
+        public LockedFailedException() {
+            super();
+        }
 
+        public LockedFailedException(String message) {
+            super(message);
+        }
+
+        public LockedFailedException(String message, Throwable cause) {
+            super(message, cause);
+        }
+    }
+    public static class CacheConfig{
+        //key 失效时间
+        private long expireTimeMs;
+        //如果内容为空失效时间 默认为等同expireTimeMs
+        private long nullExpireTimeMs;
+        //最长等待时间 如果小于等于0，无法查询到结果且无法获取锁则直接抛出 默认5000毫秒
+        private long maxWaitTimeMs;
+        //等待时内线程休眠时间 默认50ms
+        private long waitSleepTimeMs = 50;
+        //分布式锁等待时长 默认为600s
+        private long lockTimeMs = 600*1000;
+        //是否允许缓存为空，不允许则执行后续操作 默认允许为空
+        private boolean ifNotNull = Boolean.FALSE;
+
+        public long getExpireTimeMs() {
+            return expireTimeMs;
+        }
+
+        public void setExpireTimeMs(long expireTimeMs) {
+            this.expireTimeMs = expireTimeMs;
+        }
+
+        public long getNullExpireTimeMs() {
+            return nullExpireTimeMs;
+        }
+
+        public void setNullExpireTimeMs(long nullExpireTimeMs) {
+            this.nullExpireTimeMs = nullExpireTimeMs;
+        }
+
+        public long getMaxWaitTimeMs() {
+            return maxWaitTimeMs;
+        }
+
+        public void setMaxWaitTimeMs(long maxWaitTimeMs) {
+            this.maxWaitTimeMs = maxWaitTimeMs;
+        }
+
+        public long getWaitSleepTimeMs() {
+            return waitSleepTimeMs;
+        }
+
+        public void setWaitSleepTimeMs(long waitSleepTimeMs) {
+            this.waitSleepTimeMs = waitSleepTimeMs;
+        }
+
+        public long getLockTimeMs() {
+            return lockTimeMs;
+        }
+
+        public void setLockTimeMs(long lockTimeMs) {
+            this.lockTimeMs = lockTimeMs;
+        }
+
+        public Boolean getIfNotNull() {
+            return ifNotNull;
+        }
+
+        public void setIfNotNull(Boolean ifNotNull) {
+            this.ifNotNull = ifNotNull;
+        }
+    }
 
 
 }
