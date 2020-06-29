@@ -9,30 +9,34 @@ import java.util.Map;
 import java.util.Vector;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Function;
 
 
 /**
- * @auth zhufg
+ * @author zhufg
  *  线程池实现，请尽量不要使用thread.sleep
  */
 public class ThreadPoolUtil {
     private static final Logger logger = LoggerFactory.getLogger(ThreadPoolUtil.class);
-    private static final Map<String, ExecutorService> executorMap = new ConcurrentHashMap<String, ExecutorService>();
+    private static final Map<String, ExecutorService> executorMap = new ConcurrentHashMap<>();
     private static final int availableProcessors = Runtime.getRuntime().availableProcessors();
+    private static final ReentrantLock lock = new ReentrantLock();
 
     private static ExecutorService getExecutor(String name) {
-        String executorName = new StringBuilder("EXECUTOR_").append(name).toString();
+        String executorName = "EXECUTOR_"+name;
         ExecutorService executorOne = executorMap.get(executorName);
         if (executorOne == null) {
-            synchronized (executorName) {
+            lock.lock();
+            try {
                 executorOne = executorMap.get(executorName);
                 if (executorOne == null) {
                     executorOne = newThreadPool();
-                    executorMap.put(executorName, executorOne);
+                    executorMap.put(name, executorOne);
                 }
+            }finally {
+                lock.unlock();
             }
-
         }
         return executorOne;
     }
@@ -100,7 +104,7 @@ public class ThreadPoolUtil {
         if (perSize <= 0) {
             throw new RuntimeException("error partition by perSize error");
         }
-        List<List<T>> lists = new ArrayList<List<T>>(perSize);
+        List<List<T>> lists = new ArrayList<>(perSize);
         if (list == null || list.size() == 0) {
             return lists;
         }
@@ -127,7 +131,7 @@ public class ThreadPoolUtil {
     public enum PoolExceptionPolicy{
         IGNORE,
         SHUTDOWN,
-        RETURNRULSTNOW;
+        RETURNRULSTNOW
     }
     public static CountDownLatchHerlper getResultHelper(String taskName, int timeoutSec, PoolExceptionPolicy poolExceptionPolicy){
         return new CountDownLatchHerlper(taskName, timeoutSec, poolExceptionPolicy);
@@ -144,9 +148,9 @@ public class ThreadPoolUtil {
         private long endTime;
         private long lastMillis;
         private volatile int taskStatus;//0未执行1执行中2执行完毕
-        private List<Future<T>>  futures = new ArrayList<>();
-        List<T> results = new ArrayList<>();
-        private List<Exception> exs = new ArrayList<>();
+        private List<Future<T>>  futures = new CopyOnWriteArrayList<>();
+        List<T> results = new Vector<>();
+        private List<Exception> exs = new Vector<>();
         private CountDownLatchHerlper(String taskName, int timeoutSec,PoolExceptionPolicy poolExceptionPolicy){
             this.taskName  = taskName;
             this.timeoutSec = timeoutSec;
@@ -201,7 +205,6 @@ public class ThreadPoolUtil {
                     if(PoolExceptionPolicy.IGNORE.equals(poolExceptionPolicy)){
                         logger.error("执行异常，根据执行策略，继续执行", e);
                         this.exs.add(e);
-                        continue;
                     }
                 }
             }
@@ -218,9 +221,7 @@ public class ThreadPoolUtil {
                 if(t.isDone()){
                     try {
                         results.add(t.get());
-                    } catch (InterruptedException e) {
-                        // just ignore
-                    } catch (ExecutionException e) {
+                    } catch (InterruptedException  | ExecutionException e ) {
                         // just ignore
                     }
                 }else {
@@ -251,7 +252,7 @@ public class ThreadPoolUtil {
             return exs;
         }
     }
-    public static class ResultVoidHerlper<T>{
+    public static class ResultVoidHerlper{
         private String taskName;
         private int timeoutSec;
         private PoolExceptionPolicy poolExceptionPolicy;
@@ -260,7 +261,7 @@ public class ThreadPoolUtil {
         private long endTime;
         private long lastMillis;
         private volatile int taskStatus;//0未执行1执行中2执行完毕3执行中有异常
-        private List<Future<T>>  futures = new Vector<>();
+        private List<Future<Integer>>  futures = new CopyOnWriteArrayList<>();
         private List<Exception> exs = new Vector<>();
         private ResultVoidHerlper(String taskName, int timeoutSec,PoolExceptionPolicy poolExceptionPolicy){
             this.taskName  = taskName;
@@ -276,12 +277,9 @@ public class ThreadPoolUtil {
                 throw new RuntimeException("任务已执行完毕，无法添加任务");
             }
             this.taskStatus = 1;
-            Future<T> t = submit(taskName, new Callable<T>(){
-                @Override
-                public T call() throws Exception {
-                    run.run();
-                    return (T)Integer.valueOf(1);
-                }
+            Future<Integer> t = submit(taskName, () -> {
+                run.run();
+                return 1;
             });
             futures.add(t);
             return this;
@@ -290,7 +288,7 @@ public class ThreadPoolUtil {
             if(this.taskStatus >=2){
                 throw new RuntimeException("任务已执行完毕，无需再次执行");
             }
-            for (Future<T> t : futures) {
+            for (Future<Integer> t : futures) {
                 try {
                     if (lastMillis < System.currentTimeMillis()) {
                         throw new TimeoutException("执行任务超时！");
@@ -334,12 +332,12 @@ public class ThreadPoolUtil {
         }
 
         private void doneInProgress() {
-            for(Future<T> t :futures ){
+            for(Future<Integer> t :futures ){
                 if(t.isDone()){
                     continue;
-                }else {
-                    t.cancel(true);
                 }
+                t.cancel(true);
+
             }
         }
 
@@ -361,4 +359,6 @@ public class ThreadPoolUtil {
         }
 
     }
+
+
 }
