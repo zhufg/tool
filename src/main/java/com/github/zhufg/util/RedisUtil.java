@@ -46,14 +46,14 @@ public class RedisUtil {
      * 为了防止过多线程等待的问题，设置最长等待时间
      * 执行时间不受限，请自行解决执行过慢的问题
      * 不希望通过工具去限制最长执行时间
-     * @param key
-     * @param type
-     * @param sp
-     * @param expireTime
-     * @param timeUnit
-     * @param redisTemplate
+     * @param key key
+     * @param type type
+     * @param sp 实现
+     * @param expireTime 超时时间
+     * @param timeUnit 时间单位
+     * @param redisTemplate redisTemplate
      * @param maxWaitTime 最长等待时间
-     * @param <T>
+     * @param <T> 返回
      * @return
      * @throws TimeoutException
      */
@@ -66,15 +66,13 @@ public class RedisUtil {
         return getListCache(key, type, sp, redisTemplate, cacheConfig);
     }
     public static <T>List getListCache(String key, Type type, Supplier<List<T>> sp, RedisTemplate redisTemplate,CacheConfig cacheConfig) throws TimeoutException {
-        List<T> t = null;
 
         String value = lockCacheGet(key, sp, redisTemplate,cacheConfig);
         if (value == null) {
             return Collections.EMPTY_LIST;
         }
-        t = JSON.parseObject(value, new TypeReference<List<T>>(type) {});
+        return JSON.parseObject(value, new TypeReference<List<T>>(type) {});
 
-        return t;
     }
 
     /**
@@ -338,8 +336,7 @@ public class RedisUtil {
             if(StringUtils.isBlank(get)){
                 return null;
             }
-            T t  = JSON.parseObject(get, type);
-            return t;
+            return JSON.parseObject(get, type);
         }catch (Exception e){
             throw new RedisInvalidException("redis get 异常",e);
         }
@@ -350,9 +347,8 @@ public class RedisUtil {
             if (value == null) {
                 return Collections.EMPTY_LIST;
             }
-            List<T> t = JSON.parseObject(value, new TypeReference<List<T>>(type) {});
+            return JSON.parseObject(value, new TypeReference<List<T>>(type) {});
 
-            return t;
         }catch (Exception e){
             throw new RedisInvalidException("redis get 异常",e);
         }
@@ -364,16 +360,14 @@ public class RedisUtil {
         if (value == null || EMPTY_STRING.equals(value) ) {
             return Collections.EMPTY_LIST;
         }
-        List<T>  t = JSON.parseObject(value.toString(), new TypeReference<List<T>>(type) {});
-        return t;
+        return JSON.parseObject(value.toString(), new TypeReference<List<T>>(type) {});
     }
     public static <T>T getObjectCache(RedisTemplate redisTemplate, String key, Type type) throws RedisInvalidException {
         Object value = get(redisTemplate, key);
         if (value == null || EMPTY_STRING.equals(value) ) {
             return null;
         }
-        T t = JSON.parseObject(value.toString(), type);
-        return t;
+        return JSON.parseObject(value.toString(), type);
     }
     public static Boolean delete(RedisTemplate redisTemplate, String key){
         return redisTemplate.delete(key);
@@ -436,6 +430,7 @@ public class RedisUtil {
     }
     public static class CacheConfig{
         //key 失效时间
+
         private long expireTimeMs;
         //如果内容为空失效时间 默认为等同expireTimeMs
         private long nullExpireTimeMs;
